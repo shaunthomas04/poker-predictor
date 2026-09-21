@@ -1,79 +1,67 @@
 import random
-from poker_items import Hand, Deck
+
+from poker_items import Deck, Hand
+
 
 def monte_carlo(current_hand, opponent_count, trial_count):
-    # win counts and sum of percentiles for each stage
+    if opponent_count < 0:
+        raise ValueError("opponent_count cannot be negative")
+    if trial_count <= 0:
+        raise ValueError("trial_count must be greater than zero")
+
     stage_wins = [0, 0, 0, 0]
-    stage_percentiles = [0, 0, 0, 0]
+    stage_percentiles = [0.0, 0.0, 0.0, 0.0]
+    stages = [0, 3, 4, 5]
 
-    stages = [0, 3, 4, 5]  # preflop, flop, turn, river
+    known_community = current_hand.get_community_cards()
+    private_cards = current_hand.get_private_cards()
+    if len(known_community) > 5:
+        raise ValueError("A hand cannot contain more than five community cards")
 
-    for sim in range(trial_count):
+    for _ in range(trial_count):
         deck = Deck()
-        # remove known cards from deck
         for card in current_hand.cards:
             deck.remove_card(card)
 
-        community_cards = current_hand.get_community_cards()
-        for card in community_cards:
-            deck.remove_card(card)
-
-        # create opponents
         players = []
         names = ["Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Hank"]
-        for _ in range(opponent_count):
-            opp = Hand(name=random.choice(names))
-            deck.add_player(opp)
-            players.append(opp)
+        for index in range(opponent_count):
+            opponent = Hand(name=f"{random.choice(names)} {index + 1}")
+            deck.add_player(opponent)
+            players.append(opponent)
 
-        # fill remaining community cards for this trial
-        full_community = community_cards.copy()
+        full_community = list(known_community)
         while len(full_community) < 5:
-            full_community.append(deck.draw_card())
+            card = deck.draw_card()
+            if card is None:
+                raise RuntimeError("The deck ran out of cards during simulation")
+            full_community.append(card)
 
-        # evaluate hands at each stage
-        for stage_index, num_community in enumerate(stages):
-            stage_community = full_community[:num_community]
+        for stage_index, community_count in enumerate(stages):
+            stage_community = full_community[:community_count]
+            user_score = Hand(cards=private_cards + stage_community).determine_hand_value()
+            opponent_scores = [
+                Hand(cards=opponent.cards + stage_community).determine_hand_value()
+                for opponent in players
+            ]
 
-            temp_user_hand = Hand(cards=current_hand.cards + stage_community)
-            user_score = temp_user_hand.determine_hand_value()
-
-            temp_opp_scores = []
-            for opp in players:
-                temp_opp_hand = Hand(cards=opp.cards + stage_community)
-                temp_opp_scores.append(temp_opp_hand.determine_hand_value())
-
-            # check if user has best hand
-            win = True
-            better_count = 0
-            for opp_score in temp_opp_scores:
-                if opp_score[1] > user_score[1] or (
-                    opp_score[1] == user_score[1] and opp_score[2] > user_score[2]
-                ):
-                    win = False
-                    better_count += 1
-
-            if win:
+            better_count = sum(
+                (score[1], score[2]) > (user_score[1], user_score[2])
+                for score in opponent_scores
+            )
+            if better_count == 0:
                 stage_wins[stage_index] += 1
 
-            # approximate percentile
-            percentile = (opponent_count - better_count) / opponent_count
-            stage_percentiles[stage_index] += percentile
+            total_players = opponent_count + 1
+            stage_percentiles[stage_index] += (total_players - better_count) / total_players
 
-    # convert counts to probabilities and average percentiles
-    win_probabilities = [count / trial_count for count in stage_wins]
+    win_probabilities = [wins / trial_count for wins in stage_wins]
     avg_percentiles = [total / trial_count for total in stage_percentiles]
 
-    # print stage-by-stage results
     stage_names = ["Preflop", "Flop", "Turn", "River"]
-    for i in range(4):
-        print(f"{stage_names[i]} - Win Probability: {win_probabilities[i]:.3f}, "
-              f"Percentile: {avg_percentiles[i]:.3f}")
+    for name, win_probability, percentile in zip(stage_names, win_probabilities, avg_percentiles):
+        print(f"{name} - Win Probability: {win_probability:.3f}, Percentile: {percentile:.3f}")
 
-    # print final results
-    final_win = win_probabilities[-1]
-    final_percentile = avg_percentiles[-1]
-    print(f"\nFinal Win Probability: {final_win:.3f}")
-    print(f"Final Percentile: {final_percentile:.3f}")
-
+    print(f"\nFinal Win Probability: {win_probabilities[-1]:.3f}")
+    print(f"Final Percentile: {avg_percentiles[-1]:.3f}")
     return win_probabilities, avg_percentiles

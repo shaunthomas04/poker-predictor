@@ -2,133 +2,152 @@ from collections import Counter
 from itertools import combinations
 import random
 
+
+RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
+SUITS = ["hearts", "diamonds", "clubs", "spades"]
+RANK_VALUES = {rank: value for value, rank in enumerate(RANKS, start=2)}
+
+
 class Card:
     def __init__(self, suit, rank):
-        rank_map = {"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,"10":10,
-                    "J":11,"Q":12,"K":13,"A":14}
+        if suit not in SUITS:
+            raise ValueError(f"Unknown suit: {suit}")
+        if rank not in RANK_VALUES:
+            raise ValueError(f"Unknown rank: {rank}")
+
         self.suit = suit
         self.rank_str = rank
-        self.rank = rank_map.get(rank, 0)
+        self.rank = RANK_VALUES[rank]
         self.is_community_card = True
 
     def __str__(self):
         return f"{self.rank_str} of {self.suit} ({self.rank})"
 
+
 class Hand:
     def __init__(self, cards=None, name="Player"):
-        self.cards = cards if cards else []
+        self.cards = list(cards) if cards else []
         self.name = name
         self.hand_worth = None
 
+    @staticmethod
+    def _straight_high(ranks):
+        unique_ranks = set(ranks)
+        if {14, 2, 3, 4, 5}.issubset(unique_ranks):
+            return 5
+
+        consecutive = sorted(unique_ranks)
+        for index in range(len(consecutive) - 4):
+            window = consecutive[index:index + 5]
+            if window[-1] - window[0] == 4:
+                return window[-1]
+        return None
+
+    @classmethod
+    def _evaluate_five(cls, cards):
+        rank_counts = Counter(card.rank for card in cards)
+        counts = sorted(rank_counts.values(), reverse=True)
+        ranks = sorted(rank_counts, reverse=True)
+        is_flush = len({card.suit for card in cards}) == 1
+        straight_high = cls._straight_high(ranks)
+
+        if is_flush and straight_high:
+            if straight_high == 14 and set(ranks) == {10, 11, 12, 13, 14}:
+                return ("Royal Flush", 10, [14])
+            return ("Straight Flush", 9, [straight_high])
+
+        if counts and counts[0] == 4:
+            quad = max(rank for rank, count in rank_counts.items() if count == 4)
+            kicker = max(rank for rank in ranks if rank != quad)
+            return ("Four of a Kind", 8, [quad, kicker])
+
+        triples = sorted((rank for rank, count in rank_counts.items() if count == 3), reverse=True)
+        pairs = sorted((rank for rank, count in rank_counts.items() if count == 2), reverse=True)
+        if triples and (pairs or len(triples) > 1):
+            pair = pairs[0] if pairs else triples[1]
+            return ("Full House", 7, [triples[0], pair])
+
+        if is_flush:
+            return ("Flush", 6, ranks)
+        if straight_high:
+            return ("Straight", 5, [straight_high])
+
+        if triples:
+            triple = triples[0]
+            kickers = sorted((rank for rank in ranks if rank != triple), reverse=True)
+            return ("Three of a Kind", 4, [triple] + kickers)
+
+        if len(pairs) >= 2:
+            kicker = max(rank for rank in ranks if rank not in pairs)
+            return ("Two Pair", 3, pairs[:2] + [kicker])
+
+        if pairs:
+            pair = pairs[0]
+            kickers = sorted((rank for rank in ranks if rank != pair), reverse=True)
+            return ("One Pair", 2, [pair] + kickers)
+
+        return ("High Card", 1, ranks)
+
     def determine_hand_value(self):
-        def is_straight_ranks(ranks):
-            ranks = sorted(set(ranks))
-            if set([14,2,3,4,5]).issubset(ranks):
-                return True
-            for i in range(len(ranks)-4):
-                if ranks[i+4]-ranks[i]==4:
-                    return True
-            return False
-
-        def evaluate_five(cards):
-            rank_counts = Counter(card.rank for card in cards)
-            counts = sorted(rank_counts.values(), reverse=True)
-            ranks = sorted(rank_counts.keys(), reverse=True)
-            suits = [card.suit for card in cards]
-            is_flush = len(set(suits))==1
-            straight = is_straight_ranks(ranks)
-
-            if is_flush and straight:
-                if set(ranks)=={10,11,12,13,14}:
-                    return ("Royal Flush",10,ranks)
-                return ("Straight Flush",9,[max(ranks)])
-            if len(counts) >= 1 and counts[0]==4:
-                quad = [r for r,cnt in rank_counts.items() if cnt==4][0]
-                kicker = [r for r in ranks if r != quad][0]
-                return ("Four of a Kind",8,[quad,kicker])
-            if len(counts) >= 2 and counts[0]==3 and counts[1]==2:
-                triple = [r for r,cnt in rank_counts.items() if cnt==3][0]
-                pair = [r for r,cnt in rank_counts.items() if cnt==2][0]
-                return ("Full House",7,[triple,pair])
-            if is_flush:
-                return ("Flush",6,sorted(ranks,reverse=True))
-            if straight:
-                return ("Straight",5,[max(ranks)])
-            if len(counts) >= 1 and counts[0]==3:
-                triple = [r for r,cnt in rank_counts.items() if cnt==3][0]
-                kickers = sorted([r for r in ranks if r != triple], reverse=True)
-                return ("Three of a Kind",4,[triple]+kickers)
-            if len(counts) >= 2 and counts[0]==2 and counts[1]==2:
-                pairs = sorted([r for r,cnt in rank_counts.items() if cnt==2], reverse=True)
-                kicker = [r for r in ranks if r not in pairs][0]
-                return ("Two Pair",3,pairs+[kicker])
-            if len(counts) >= 1 and counts[0]==2:
-                pair = [r for r,cnt in rank_counts.items() if cnt==2][0]
-                kickers = sorted([r for r in ranks if r != pair], reverse=True)
-                return ("One Pair",2,[pair]+kickers)
-            return ("High Card",1,sorted(ranks,reverse=True))
+        if not self.cards:
+            return ("High Card", 1, [])
 
         if len(self.cards) <= 5:
-            return evaluate_five(self.cards)
+            return self._evaluate_five(self.cards)
 
-        best = ("High Card",1,[])
-        for combo in combinations(self.cards,5):
-            result = evaluate_five(combo)
-            if result[1] > best[1] or (result[1]==best[1] and result[2] > best[2]):
+        best = ("High Card", 1, [])
+        for combo in combinations(self.cards, 5):
+            result = self._evaluate_five(combo)
+            if (result[1], result[2]) > (best[1], best[2]):
                 best = result
         return best
 
-    def add_card(self,new_card):
+    def add_card(self, new_card):
+        if new_card is None:
+            raise ValueError("Cannot add an empty card")
         self.cards.append(new_card)
         self.hand_worth = self.determine_hand_value()
 
     def get_community_cards(self):
-        community_cards = []
-        for card in self.cards:
-            if card.is_community_card:
-                community_cards.append(card)
-        return community_cards
+        return [card for card in self.cards if card.is_community_card]
+
+    def get_private_cards(self):
+        return [card for card in self.cards if not card.is_community_card]
 
     def __str__(self):
         hand_str = f"{self.name}'s Hand:\n"
-        for card in self.cards:
-            hand_str += str(card) + "\n"
+        hand_str += "\n".join(str(card) for card in self.cards)
         name, rank, tie = self.determine_hand_value()
-        display_rank = tie[0] if tie else rank
-        hand_str += f"\nBest Hand: {name} (Rank: {display_rank}, Tie-breakers: {tie})"
-        # hand_str += f"\nBest Hand: {name} (Rank: {rank}, Tie-breakers: {tie})"
+        hand_str += f"\n\nBest Hand: {name} (Rank: {rank}, Tie-breakers: {tie})"
         return hand_str
+
 
 class Deck:
     def __init__(self):
-        self.unknown_cards=[]
-        for rank in ["2","3","4","5","6","7","8","9","10","J","Q","K","A"]:
-            for suit in ["hearts","diamonds","clubs","spades"]:
-                self.unknown_cards.append(Card(suit,rank))
-        self.players=[]
+        self.unknown_cards = [Card(suit, rank) for rank in RANKS for suit in SUITS]
+        self.players = []
 
     def draw_card(self):
         if not self.unknown_cards:
             return None
         return self.unknown_cards.pop(random.randrange(len(self.unknown_cards)))
 
-    def add_player(self,player_hand):
+    def add_player(self, player_hand):
         if len(self.unknown_cards) < 2:
-            return
+            raise ValueError("Not enough cards to deal a player")
         self.players.append(player_hand)
-        card = self.draw_card()
-        card.is_community_card = False
-        player_hand.add_card(card)
-        card = self.draw_card()
-        card.is_community_card = False
-        player_hand.add_card(card)
+        for _ in range(2):
+            card = self.draw_card()
+            card.is_community_card = False
+            player_hand.add_card(card)
 
     def update_cards(self):
         for player in self.players:
             player.add_card(self.draw_card())
 
     def remove_card(self, card):
-        for c in self.unknown_cards:
-            if c.suit == card.suit and c.rank_str == card.rank_str:
-                self.unknown_cards.remove(c)
-                return
+        for index, unknown_card in enumerate(self.unknown_cards):
+            if (unknown_card.suit, unknown_card.rank_str) == (card.suit, card.rank_str):
+                self.unknown_cards.pop(index)
+                return True
+        return False
